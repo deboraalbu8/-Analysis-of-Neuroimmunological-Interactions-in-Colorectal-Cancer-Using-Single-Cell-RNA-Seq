@@ -1,0 +1,104 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+"""
+Integration of multiple single-cell RNA-seq datasets using Scanorama.
+
+This script:
+1. Loads individual AnnData (.h5ad) objects
+2. Performs standard preprocessing on each dataset
+3. Integrates datasets using Scanorama
+4. Concatenates integrated objects
+5. Computes UMAP and Leiden clustering
+6. Saves the final integrated AnnData object
+"""
+
+# ===============================
+# Imports
+# ===============================
+import scanpy as sc
+import scanorama
+
+# ===============================
+# Load datasets
+# ===============================
+file_paths = [
+    "sobj_35.h5ad",
+    "sobj_41.h5ad",
+    "sobj_57.h5ad",
+    "sobj_65.h5ad",
+    "sobj_97.h5ad",
+]
+
+adatas = [sc.read_h5ad(fp) for fp in file_paths]
+
+# ===============================
+# Preprocessing (per dataset)
+# ===============================
+for adata in adatas:
+    # Normalize total counts per cell
+    sc.pp.normalize_total(adata, target_sum=1e4)
+
+    # Log-transform the data
+    sc.pp.log1p(adata)
+
+    # Identify highly variable genes
+    sc.pp.highly_variable_genes(
+        adata,
+        n_top_genes=6000,
+        subset=True
+    )
+
+    # Scale the data
+    sc.pp.scale(adata, max_value=10)
+
+# ===============================
+# Scanorama integration
+# ===============================
+# Perform Scanorama integration (adds corrected embeddings)
+scanorama.integrate_scanpy(adatas)
+
+# ===============================
+# Concatenate integrated datasets
+# ===============================
+# Concatenate datasets and store dataset origin in 'batch'
+adata_combined = adatas[0].concatenate(
+    *adatas[1:],
+    batch_key="batch",
+    batch_categories=[
+        "sobj_35",
+        "sobj_41",
+        "sobj_57",
+        "sobj_65",
+        "sobj_97",
+    ],
+)
+
+# ===============================
+# Downstream analysis
+# ===============================
+# Compute neighborhood graph using Scanorama embedding
+sc.pp.neighbors(
+    adata_combined,
+    use_rep="X_scanorama"
+)
+
+# Compute UMAP
+sc.tl.umap(adata_combined)
+
+# Perform Leiden clustering
+sc.tl.leiden(adata_combined, resolution=1.0)
+
+# ===============================
+# Visualization
+# ===============================
+# Plot UMAP colored by batch and clusters
+sc.pl.umap(
+    adata_combined,
+    color=["batch", "leiden"]
+)
+
+# ===============================
+# Save integrated object
+# ===============================
+adata_combined.write("adata_combined_integrated_scanorama.h5ad")
