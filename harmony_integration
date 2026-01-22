@@ -1,0 +1,116 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+"""
+Integration of multiple single-cell RNA-seq datasets using Harmony.
+
+This script:
+1. Loads multiple AnnData (.h5ad) objects
+2. Concatenates datasets while preserving batch information
+3. Performs standard preprocessing (normalization, HVGs, scaling, PCA)
+4. Applies Harmony for batch correction
+5. Computes UMAP and Leiden clustering
+6. Saves the integrated AnnData object
+"""
+
+# ===============================
+# Imports
+# ===============================
+import scanpy as sc
+import pandas as pd
+import numpy as np
+from harmony import harmonize
+
+# ===============================
+# Load datasets
+# ===============================
+file_paths = [
+    "sobj_35.h5ad",
+    "sobj_57.h5ad",
+    "sobj_41.h5ad",
+    "sobj_65.h5ad",
+    "sobj_71_10X.h5ad",
+    "sobj_71_smart.h5ad",
+    "sobj_97.h5ad",
+]
+
+# Read all datasets into a list
+datasets = [sc.read_h5ad(fp) for fp in file_paths]
+
+# ===============================
+# Concatenate datasets
+# ===============================
+# Concatenate AnnData objects and store dataset origin in 'batch'
+adata = datasets[0].concatenate(
+    *datasets[1:],
+    batch_key="batch",
+    batch_categories=file_paths
+)
+
+# ===============================
+# Preprocessing
+# ===============================
+# Normalize total counts per cell
+sc.pp.normalize_total(adata, target_sum=1e4)
+
+# Log-transform the data
+sc.pp.log1p(adata)
+
+# Select highly variable genes across batches
+sc.pp.highly_variable_genes(
+    adata,
+    n_top_genes=6000,
+    subset=True,
+    batch_key="batch"
+)
+
+# Scale the data
+sc.pp.scale(adata, max_value=10)
+
+# Compute PCA
+sc.tl.pca(adata, n_comps=20)
+
+# ===============================
+# Harmony batch correction
+# ===============================
+# Extract PCA matrix and metadata
+pca_data = adata.obsm["X_pca"]
+metadata = adata.obs
+
+# Run Harmony using batch information
+corrected_pca = harmonize(
+    pca_data,
+    metadata,
+    batch_key="batch"
+)
+
+# Store Harmony-corrected PCA
+adata.obsm["X_pca_harmony"] = corrected_pca
+
+# ===============================
+# Downstream analysis
+# ===============================
+# Compute neighborhood graph using Harmony space
+sc.pp.neighbors(
+    adata,
+    use_rep="X_pca_harmony",
+    n_neighbors=10,
+    n_pcs=20
+)
+
+# Compute UMAP
+sc.tl.umap(adata)
+
+# Perform Leiden clustering
+sc.tl.leiden(adata)
+
+# ===============================
+# Visualization
+# ===============================
+# Plot UMAP colored by Leiden clusters
+sc.pl.umap(adata, color="leiden")
+
+# ===============================
+# Save integrated object
+# ===============================
+adata.write("sobj_6000.h5ad")
