@@ -1,0 +1,124 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+"""
+Integration of multiple single-cell RNA-seq datasets using scVI.
+
+This script:
+1. Loads individual AnnData (.h5ad) objects
+2. Concatenates datasets while preserving batch information
+3. Performs batch correction and integration using scVI
+4. Computes UMAP, clustering (Leiden), and marker genes
+5. Saves the final integrated AnnData object
+
+Author: Débora Albuquerque
+"""
+
+# ===============================
+# Imports
+# ===============================
+import scanpy as sc
+import scvi
+
+# ===============================
+# Load data
+# ===============================
+# Read individual AnnData objects
+adata1 = sc.read_h5ad("sobj_35.h5ad")
+adata2 = sc.read_h5ad("sobj_41.h5ad")
+adata3 = sc.read_h5ad("sobj_57.h5ad")
+adata4 = sc.read_h5ad("sobj_65.h5ad")
+adata5 = sc.read_h5ad("sobj_97.h5ad")
+
+# ===============================
+# Concatenate datasets
+# ===============================
+# Concatenate AnnData objects and add batch information
+adata_combined = adata1.concatenate(
+    adata2,
+    adata3,
+    adata4,
+    adata5,
+    batch_key="batch",
+    batch_categories=[
+        "sobj_35",
+        "sobj_41",
+        "sobj_57",
+        "sobj_65",
+        "sobj_97"
+    ]
+)
+
+# Check number of cells per batch
+print(adata_combined.obs["batch"].value_counts())
+
+# ===============================
+# scVI setup
+# ===============================
+# Create placeholder labels (required for some downstream tasks)
+adata_combined.obs["cell_type"] = "Unknown"
+adata_combined.obs["labels"] = adata_combined.obs["cell_type"]
+
+# Remove previous scVI setup if present
+adata_combined.uns.pop("_scvi", None)
+
+# Configure AnnData object for scVI
+scvi.model.SCVI.setup_anndata(
+    adata_combined,
+    batch_key="batch"
+)
+
+# ===============================
+# Train scVI model
+# ===============================
+# Initialize the model
+model = scvi.model.SCVI(adata_combined)
+
+# Train the model
+model.train(max_epochs=100)
+
+# Extract latent representation
+adata_combined.obsm["X_scVI"] = model.get_latent_representation()
+
+# ===============================
+# Downstream analysis (UMAP & neighbors)
+# ===============================
+# Compute neighborhood graph using scVI latent space
+sc.pp.neighbors(adata_combined, use_rep="X_scVI")
+
+# Compute UMAP
+sc.tl.umap(adata_combined)
+
+# Visualize batch mixing
+sc.pl.umap(adata_combined, color=["batch"])
+
+# ===============================
+# Clustering
+# ===============================
+# Leiden clustering
+sc.tl.leiden(adata_combined, resolution=1.0)
+
+# Plot clusters and batches
+sc.pl.umap(adata_combined, color=["leiden", "batch"])
+
+# ===============================
+# Marker gene analysis
+# ===============================
+# Identify cluster marker genes
+sc.tl.rank_genes_groups(
+    adata_combined,
+    groupby="leiden",
+    method="wilcoxon"
+)
+
+# Plot top marker genes
+sc.pl.rank_genes_groups(
+    adata_combined,
+    n_genes=10,
+    sharey=False
+)
+
+# ===============================
+# Save integrated object
+# ===============================
+adata_combined.write("adata_combined_integrated_scvi.h5ad")
