@@ -1,0 +1,122 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+"""
+Benchmarking integrated single-cell RNA-seq datasets using scIB.
+
+This script:
+1. Loads integrated AnnData objects
+2. Computes batch correction and biological conservation metrics
+3. Summarizes results in a comparison table
+"""
+
+# ===============================
+# Imports
+# ===============================
+import scanpy as sc
+import scib
+import pandas as pd
+
+# ===============================
+# Load integrated datasets
+# ===============================
+adata_scvi = sc.read_h5ad("adata_combined_integrated_scvi.h5ad")
+adata_scanorama = sc.read_h5ad("adata_combined_integrated_scanorama.h5ad")
+adata_harmony = sc.read_h5ad("adata_combined_integrated_harmony.h5ad")
+adata_seurat = sc.read_h5ad("adata_combined_integrated_seuratCCA.h5ad")
+
+# ===============================
+# Metric configuration
+# ===============================
+batch_key = "batch"
+label_key = "leiden"   # or "cell_type" if available
+
+# ===============================
+# Helper function
+# ===============================
+def run_scib_metrics(adata, embed, name):
+    """
+    Compute scIB metrics for a given AnnData object and embedding.
+    """
+    results = {}
+
+    # ---------- Batch correction ----------
+    results["iLISI"] = scib.metrics.ilisi_graph(
+        adata,
+        batch_key=batch_key,
+        embed=embed
+    )
+
+    results["kBET"] = scib.metrics.kBET(
+        adata,
+        batch_key=batch_key,
+        embed=embed,
+        verbose=False
+    )[0]
+
+    results["Graph connectivity"] = scib.metrics.graph_connectivity(
+        adata,
+        label_key=label_key
+    )
+
+    # ---------- Biological conservation ----------
+    results["cLISI"] = scib.metrics.clisi_graph(
+        adata,
+        label_key=label_key,
+        embed=embed
+    )
+
+    results["ARI"] = scib.metrics.ari(
+        adata,
+        label_key=label_key,
+        cluster_key="leiden"
+    )
+
+    results["NMI"] = scib.metrics.nmi(
+        adata,
+        label_key=label_key,
+        cluster_key="leiden"
+    )
+
+    return pd.Series(results, name=name)
+
+# ===============================
+# Run scIB benchmark
+# ===============================
+results = []
+
+results.append(run_scib_metrics(
+    adata_scvi,
+    embed="X_scVI",
+    name="scVI"
+))
+
+results.append(run_scib_metrics(
+    adata_scanorama,
+    embed="X_scanorama",
+    name="Scanorama"
+))
+
+results.append(run_scib_metrics(
+    adata_harmony,
+    embed="X_pca_harmony",
+    name="Harmony"
+))
+
+results.append(run_scib_metrics(
+    adata_seurat,
+    embed="X_pca",
+    name="Seurat_CCA"
+))
+
+# ===============================
+# Compile results table
+# ===============================
+scib_results = pd.concat(results, axis=1).T
+
+print(scib_results)
+
+# ===============================
+# Save results
+# ===============================
+scib_results.to_csv("scIB_integration_benchmark_results.csv")
