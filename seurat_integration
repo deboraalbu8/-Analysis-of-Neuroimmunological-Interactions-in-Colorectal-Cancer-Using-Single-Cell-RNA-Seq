@@ -1,0 +1,156 @@
+#!/usr/bin/env Rscript
+
+# ======================================================
+# Integration of multiple scRNA-seq datasets using Seurat CCA
+#
+# This script:
+# 1. Loads AnnData (.h5ad) files
+# 2. Converts them to Seurat objects
+# 3. Performs standard preprocessing
+# 4. Integrates datasets using Canonical Correlation Analysis (CCA)
+# 5. Computes UMAP and Leiden-like clustering
+# 6. Saves the integrated Seurat object
+# ======================================================
+
+# ===============================
+# File paths
+# ===============================
+file_paths <- c(
+  "sobj_35.h5ad",
+  "sobj_41.h5ad",
+  "sobj_57.h5ad",
+  "sobj_65.h5ad",
+  "sobj_97.h5ad"
+)
+
+sample_names <- c(
+  "sobj_35",
+  "sobj_41",
+  "sobj_57",
+  "sobj_65",
+  "sobj_97"
+)
+
+# ===============================
+# Load and convert datasets
+# ===============================
+seurat_list <- list()
+
+for (i in seq_along(file_paths)) {
+
+  # Convert h5ad to h5seurat
+  Convert(
+    file = file_paths[i],
+    dest = "h5seurat",
+    overwrite = TRUE
+  )
+
+  # Load as Seurat object
+  seu <- LoadH5Seurat(
+    paste0(gsub(".h5ad", "", file_paths[i]), ".h5seurat")
+  )
+
+  # Add batch/sample information
+  seu$batch <- sample_names[i]
+
+  seurat_list[[sample_names[i]]] <- seu
+}
+
+# ===============================
+# Preprocessing (per dataset)
+# ===============================
+for (i in seq_along(seurat_list)) {
+
+  seurat_list[[i]] <- NormalizeData(
+    seurat_list[[i]],
+    normalization.method = "LogNormalize",
+    scale.factor = 10000
+  )
+
+  seurat_list[[i]] <- FindVariableFeatures(
+    seurat_list[[i]],
+    selection.method = "vst",
+    nfeatures = 6000
+  )
+}
+
+# ===============================
+# Seurat CCA integration
+# ===============================
+# Select shared features for integration
+integration_features <- SelectIntegrationFeatures(
+  object.list = seurat_list,
+  nfeatures = 6000
+)
+
+# Find integration anchors using CCA
+anchors <- FindIntegrationAnchors(
+  object.list = seurat_list,
+  anchor.features = integration_features,
+  reduction = "cca"
+)
+
+# Integrate datasets
+seu_integrated <- IntegrateData(
+  anchorset = anchors
+)
+
+# ===============================
+# Downstream analysis
+# ===============================
+# Switch to integrated assay
+DefaultAssay(seu_integrated) <- "integrated"
+
+# Scale integrated data
+seu_integrated <- ScaleData(seu_integrated)
+
+# Run PCA
+seu_integrated <- RunPCA(
+  seu_integrated,
+  npcs = 30
+)
+
+# Compute UMAP
+seu_integrated <- RunUMAP(
+  seu_integrated,
+  dims = 1:30
+)
+
+# Find neighbors and clusters
+seu_integrated <- FindNeighbors(
+  seu_integrated,
+  dims = 1:30
+)
+
+seu_integrated <- FindClusters(
+  seu_integrated,
+  resolution = 1.0
+)
+
+# ===============================
+# Visualization
+# ===============================
+# UMAP colored by batch
+p1 <- DimPlot(
+  seu_integrated,
+  group.by = "batch",
+  reduction = "umap"
+)
+
+# UMAP colored by clusters
+p2 <- DimPlot(
+  seu_integrated,
+  group.by = "seurat_clusters",
+  reduction = "umap",
+  label = TRUE
+)
+
+p1 + p2
+
+# ===============================
+# Save integrated object
+# ===============================
+saveRDS(
+  seu_integrated,
+  file = "seurat_integrated_CCA.rds"
+)
